@@ -164,23 +164,6 @@ internal static class ModOrganizer
 		return modPath.Contains(Path.Combine("workshop"), StringComparison.InvariantCultureIgnoreCase);
 	}
 
-	internal static HashSet<string> IdentifyMissingWorkshopDependencies()
-	{
-		var mods = FindWorkshopMods();
-		var installedSlugs = mods.Select(s => s.Name).ToArray();
-
-		HashSet<string> missingModSlugs = new HashSet<string>();
-
-		// This won't look recursively for missing deps. Because any recursive missing deps implies a missing dep elsewhere
-		foreach (var mod in mods.Where(m => m.properties.modReferences.Length > 0)) {
-			var missingDeps = mod.properties.modReferences.Select(dep => dep.mod).Where(slug => !installedSlugs.Contains(slug));
-
-			missingModSlugs.UnionWith(missingDeps);
-		}
-
-		return missingModSlugs;
-	}
-
 	/// <summary>
 	/// Returns changes based on last time <see cref="SaveLastLaunchedMods"/> was called. Can be null if no changes.
 	/// </summary>
@@ -329,7 +312,12 @@ internal static class ModOrganizer
 		VerifyNames(modsToLoad);
 
 		try {
-			EnsureDependenciesExist(modsToLoad, false);
+			// Guarantee that all non-weak dependencies are enabled when going to reload
+			if (!EnsureAllDependenciesEnabled(modsToLoad, false)) {
+				modsToLoad = mods.Where(mod => mod.Enabled && LoadSide(mod.properties.side)).ToList();
+				VerifyNames(modsToLoad);
+			}
+
 			EnsureTargetVersionsMet(modsToLoad);
 			return Sort(modsToLoad);
 		}
@@ -396,19 +384,74 @@ internal static class ModOrganizer
 
 	internal static void EnsureDependenciesExist(ICollection<LocalMod> mods, bool includeWeak)
 	{
-		var nameMap = mods.ToDictionary(mod => mod.Name);
-		var errored = new HashSet<LocalMod>();
+		if (GetDependenciesList(mods.ToList(), includeWeak: true, out _, out var missingDeps))
+			return;
+
+		ThrowForMissingMods(missingDeps);
+	}
+
+	internal static bool EnsureAllDependenciesEnabled(ICollection<LocalMod> mods, bool includeWeak)
+	{
+		if (!GetDependenciesList(mods.ToList(), includeWeak: true, out var foundDeps, out var missingDeps))
+			ThrowForMissingMods(missingDeps);
+
+		bool allDependenciesEnabled = true;
+		foreach (var dep in foundDeps) {
+			if (!ModLoader.IsEnabled(dep)) {
+				ModLoader.EnableMod(dep);
+				allDependenciesEnabled = false;
+			}
+		}
+
+		return allDependenciesEnabled;
+	}
+
+	private static void ThrowForMissingMods(Dictionary<LocalMod, HashSet<string>> missingDeps)
+	{
 		var errorLog = new StringBuilder();
+		foreach (var pair in missingDeps) {
+			errorLog.AppendLine(Language.GetTextValue("tModLoader.LoadErrorDependencyMissing", pair.Value, pair.Key));
+		}
 
-		foreach (var mod in mods)
-			foreach (var depName in mod.properties.RefNames(includeWeak))
-				if (!nameMap.ContainsKey(depName)) {
-					errored.Add(mod);
-					errorLog.AppendLine(Language.GetTextValue("tModLoader.LoadErrorDependencyMissing", depName, mod));
+		throw new ModSortingException(missingDeps.Keys, errorLog.ToString());
+	}
+
+	internal static HashSet<string> IdentifyMissingWorkshopDependencies()
+	{
+		var missingModSlugs = new HashSet<string>();
+
+		if (GetDependenciesList(FindWorkshopMods().ToList(), includeWeak: true, out _, out var missingDeps))
+			return missingModSlugs;
+
+		foreach (var dep in missingDeps.Values) {
+			missingModSlugs.UnionWith(dep);
+		}
+
+		return missingModSlugs;
+	}
+
+	private static bool GetDependenciesList(ICollection<LocalMod> mods, bool includeWeak, out HashSet<string> foundDeps, out Dictionary<LocalMod, HashSet<string>> missingDeps)
+	{
+		var nameMap = mods.ToDictionary(mod => mod.Name);
+		foundDeps = new HashSet<string>();
+		missingDeps = new Dictionary<LocalMod, HashSet<string>>();
+
+		foreach (var mod in mods) {
+			HashSet<string> missing = new HashSet<string>();
+
+			foreach (var depName in mod.properties.RefNames(includeWeak)) {
+				if (nameMap.TryGetValue(depName, out var found))
+					foundDeps.Add(depName);
+				else {
+					missing.Add(depName);
 				}
+			}
 
-		if (errored.Count > 0)
-			throw new ModSortingException(errored, errorLog.ToString());
+			if (missing.Count > 0)
+				missingDeps.Add(mod, missing);
+		}
+
+		return missingDeps.Count() == 0;
 	}
 
 	internal static void EnsureTargetVersionsMet(ICollection<LocalMod> mods)
