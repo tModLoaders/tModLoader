@@ -16,9 +16,11 @@ Click the text that applies to you.
 ### [I am a **player**](https://github.com/tModLoaders/tModLoader/wiki/tModLoader-guide-for-players) (Play mods)
 > **IMPORTANT**\
 > You MUST turn off UAC before installing.
-> > **NOTE**\
+
+> **NOTE**\
 > You MUST turn off UAC before installing.
-> > > **WARNING**\
+
+> **WARNING**\
 > You MUST turn off UAC before installing.
 
 ### [I am a **developer**](https://github.com/tModLoaders/tModLoader/wiki/tModLoader-guide-for-developers) (Create mods)
